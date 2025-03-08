@@ -7,235 +7,241 @@ using FFLogsViewer.Manager;
 using FFLogsViewer.Model;
 using ImGuiNET;
 
-namespace FFLogsViewer.GUI.Config;
-
-public class ThresholdsTab
+namespace FFLogsViewer.GUI.Config
 {
-    private int selectedEncounterId = -1;
-    private string selectedEncounterName = string.Empty;
-    private int minimumKills = 1;
-    private bool showNotification = true;
-    private bool autoKick = false;
-
-    public void Draw()
+    /// <summary>
+    /// The ImGui configuration tab for Kill Thresholds.
+    /// </summary>
+    public class ThresholdsTab
     {
-        var settings = Service.Configuration.KillThresholds;
-        var hasChanged = false;
+        private int selectedEncounterId = -1;
+        private string selectedEncounterName = string.Empty;
+        private int minimumKills = 1;
+        private bool showNotification = true;
+        private bool autoKick = false;
 
-        // Main toggle
-        bool enableKillChecking = settings.EnableKillChecking;
-        if (ImGui.Checkbox("Enable Kill Threshold Checking", ref enableKillChecking))
+        /// <summary>
+        /// Draws the Kill Thresholds configuration tab.
+        /// </summary>
+        public void Draw()
         {
-            settings.EnableKillChecking = enableKillChecking;
-            hasChanged = true;
-        }
+            var settings = Service.Configuration.KillThresholds;
+            var hasChanged = false;
 
-        if (enableKillChecking)
-        {
-            ImGui.Indent();
-
-            bool checkOnPartyJoin = settings.CheckOnPartyJoin;
-            if (ImGui.Checkbox("Check automatically when players join the party", ref checkOnPartyJoin))
+            // Main toggle for kill threshold checking.
+            bool enableKillChecking = settings.EnableKillChecking;
+            if (ImGui.Checkbox("Enable Kill Threshold Checking", ref enableKillChecking))
             {
-                settings.CheckOnPartyJoin = checkOnPartyJoin;
+                settings.EnableKillChecking = enableKillChecking;
                 hasChanged = true;
             }
 
-            bool checkOnlyIfPartyLeader = settings.CheckOnlyIfPartyLeader;
-            if (ImGui.Checkbox("Only check if you are the party leader", ref checkOnlyIfPartyLeader))
+            if (enableKillChecking)
             {
-                settings.CheckOnlyIfPartyLeader = checkOnlyIfPartyLeader;
-                hasChanged = true;
-            }
+                ImGui.Indent();
 
-            Util.DrawHelp("This prevents notifications when you join other people's parties.");
-
-            ImGui.Separator();
-            ImGui.Text("Configured Thresholds:");
-
-            // Display existing thresholds
-            if (settings.Thresholds.Count > 0)
-            {
-                if (ImGui.BeginTable("ThresholdsTable", 5, ImGuiTableFlags.Borders))
+                // New button to force a kill threshold check.
+                if (ImGui.Button("Force Check Kill Thresholds"))
                 {
-                    ImGui.TableSetupColumn("Encounter", ImGuiTableColumnFlags.WidthStretch);
-                    ImGui.TableSetupColumn("Min Kills", ImGuiTableColumnFlags.WidthFixed, 80 * ImGui.GetIO().FontGlobalScale);
-                    ImGui.TableSetupColumn("Notify", ImGuiTableColumnFlags.WidthFixed, 60 * ImGui.GetIO().FontGlobalScale);
-                    ImGui.TableSetupColumn("Auto-Kick", ImGuiTableColumnFlags.WidthFixed, 80 * ImGui.GetIO().FontGlobalScale);
-                    ImGui.TableSetupColumn("##Actions", ImGuiTableColumnFlags.WidthFixed, 30 * ImGui.GetIO().FontGlobalScale);
-                    ImGui.TableHeadersRow();
-
-                    for (int i = 0; i < settings.Thresholds.Count; i++)
-                    {
-                        var threshold = settings.Thresholds[i];
-
-                        ImGui.TableNextRow();
-
-                        ImGui.TableNextColumn();
-                        ImGui.Text(threshold.EncounterName);
-
-                        ImGui.TableNextColumn();
-                        int kills = threshold.MinimumKills;
-                        if (ImGui.InputInt($"##kills{i}", ref kills, 1, 5))
-                        {
-                            if (kills < 0) kills = 0;
-                            threshold.MinimumKills = kills;
-                            hasChanged = true;
-                        }
-
-                        ImGui.TableNextColumn();
-                        bool notify = threshold.ShowNotification;
-                        if (ImGui.Checkbox($"##notify{i}", ref notify))
-                        {
-                            threshold.ShowNotification = notify;
-                            hasChanged = true;
-                        }
-
-                        ImGui.TableNextColumn();
-                        bool kick = threshold.AutoKick;
-                        if (ImGui.Checkbox($"##kick{i}", ref kick))
-                        {
-                            if (kick)
-                            {
-                                ImGui.OpenPopup($"KickWarningPopup{i}");
-                            }
-                            else
-                            {
-                                threshold.AutoKick = false;
-                                hasChanged = true;
-                            }
-                        }
-
-                        // Warning popup for auto-kick
-                        if (ImGui.BeginPopup($"KickWarningPopup{i}"))
-                        {
-                            ImGui.TextColored(ImGuiColors.DalamudRed, "Warning!");
-                            ImGui.Text("Auto-kicking players may be against FFXIV's Terms of Service\n" +
-                                      "and can be considered toxic behavior. Are you sure?");
-
-                            if (ImGui.Button("Yes, Enable Auto-Kick"))
-                            {
-                                threshold.AutoKick = true;
-                                hasChanged = true;
-                                ImGui.CloseCurrentPopup();
-                            }
-                            ImGui.SameLine();
-                            if (ImGui.Button("Cancel"))
-                            {
-                                ImGui.CloseCurrentPopup();
-                            }
-
-                            ImGui.EndPopup();
-                        }
-
-                        ImGui.TableNextColumn();
-                        using (var font = ImRaii.PushFont(UiBuilder.IconFont))
-                        {
-                            if (ImGui.Button(FontAwesomeIcon.Trash.ToIconString()))
-                            {
-                                settings.Thresholds.RemoveAt(i);
-                                hasChanged = true;
-                            }
-                        }
-                    }
-
-                    ImGui.EndTable();
+                    // Print a chat message to indicate the force check is running.
+                    Service.ChatGui.Print("[KillThreshold] Force check initiated by user.");
+                    // Call the force check method in the ThresholdManager.
+                    Service.ThresholdManager.ForceCheckKillThresholds();
                 }
-            }
-            else
-            {
-                ImGui.TextColored(ImGuiColors.DalamudGrey, "No thresholds configured. Add one below.");
-            }
+                Util.DrawHelp("Click to manually force a kill threshold check.");
 
-            ImGui.Separator();
-            ImGui.Text("Add New Threshold");
-
-            // Select encounter
-            if (ImGui.BeginCombo("Encounter", selectedEncounterName == string.Empty ? "Select an encounter" : selectedEncounterName))
-            {
-                var encountersList = Service.Configuration.Layout
-                    .Where(entry => entry.Type == LayoutEntryType.Encounter)
-                    .OrderBy(entry => entry.Expansion)
-                    .ThenBy(entry => entry.Zone);
-
-                foreach (var entry in encountersList)
+                bool checkOnPartyJoin = settings.CheckOnPartyJoin;
+                if (ImGui.Checkbox("Check automatically when players join the party", ref checkOnPartyJoin))
                 {
-                    string encounterDisplay = $"{entry.Encounter} ({entry.Zone})";
-                    if (ImGui.Selectable(encounterDisplay))
+                    settings.CheckOnPartyJoin = checkOnPartyJoin;
+                    hasChanged = true;
+                }
+                Util.DrawHelp("This prevents notifications when you join other people's parties.");
+
+                ImGui.Separator();
+                ImGui.Text("Configured Thresholds:");
+
+                // Display existing thresholds.
+                if (settings.Thresholds.Count > 0)
+                {
+                    if (ImGui.BeginTable("ThresholdsTable", 5, ImGuiTableFlags.Borders))
                     {
-                        selectedEncounterId = entry.EncounterId;
-                        selectedEncounterName = entry.Encounter;
+                        ImGui.TableSetupColumn("Encounter", ImGuiTableColumnFlags.WidthStretch);
+                        ImGui.TableSetupColumn("Min Kills", ImGuiTableColumnFlags.WidthFixed, 80 * ImGui.GetIO().FontGlobalScale);
+                        ImGui.TableSetupColumn("Notify", ImGuiTableColumnFlags.WidthFixed, 60 * ImGui.GetIO().FontGlobalScale);
+                        ImGui.TableSetupColumn("Auto-Kick", ImGuiTableColumnFlags.WidthFixed, 80 * ImGui.GetIO().FontGlobalScale);
+                        ImGui.TableSetupColumn("##Actions", ImGuiTableColumnFlags.WidthFixed, 30 * ImGui.GetIO().FontGlobalScale);
+                        ImGui.TableHeadersRow();
+
+                        for (int i = 0; i < settings.Thresholds.Count; i++)
+                        {
+                            var threshold = settings.Thresholds[i];
+
+                            ImGui.TableNextRow();
+
+                            ImGui.TableNextColumn();
+                            ImGui.Text(threshold.EncounterName);
+
+                            ImGui.TableNextColumn();
+                            int kills = threshold.MinimumKills;
+                            if (ImGui.InputInt($"##kills{i}", ref kills, 1, 5))
+                            {
+                                if (kills < 0) kills = 0;
+                                threshold.MinimumKills = kills;
+                                hasChanged = true;
+                            }
+
+                            ImGui.TableNextColumn();
+                            bool notify = threshold.ShowNotification;
+                            if (ImGui.Checkbox($"##notify{i}", ref notify))
+                            {
+                                threshold.ShowNotification = notify;
+                                hasChanged = true;
+                            }
+
+                            ImGui.TableNextColumn();
+                            bool kick = threshold.AutoKick;
+                            if (ImGui.Checkbox($"##kick{i}", ref kick))
+                            {
+                                if (kick)
+                                {
+                                    ImGui.OpenPopup($"KickWarningPopup{i}");
+                                }
+                                else
+                                {
+                                    threshold.AutoKick = false;
+                                    hasChanged = true;
+                                }
+                            }
+
+                            // Warning popup for auto-kick.
+                            if (ImGui.BeginPopup($"KickWarningPopup{i}"))
+                            {
+                                ImGui.TextColored(ImGuiColors.DalamudRed, "Warning!");
+                                ImGui.Text("Auto-kicking players may be against FFXIV's Terms of Service\n" +
+                                          "and can be considered toxic behavior. Are you sure?");
+
+                                if (ImGui.Button("Yes, Enable Auto-Kick"))
+                                {
+                                    threshold.AutoKick = true;
+                                    hasChanged = true;
+                                    ImGui.CloseCurrentPopup();
+                                }
+                                ImGui.SameLine();
+                                if (ImGui.Button("Cancel"))
+                                {
+                                    ImGui.CloseCurrentPopup();
+                                }
+                                ImGui.EndPopup();
+                            }
+
+                            ImGui.TableNextColumn();
+                            using (var font = ImRaii.PushFont(UiBuilder.IconFont))
+                            {
+                                if (ImGui.Button(FontAwesomeIcon.Trash.ToIconString()))
+                                {
+                                    settings.Thresholds.RemoveAt(i);
+                                    hasChanged = true;
+                                }
+                            }
+                        }
+
+                        ImGui.EndTable();
                     }
                 }
-                ImGui.EndCombo();
-            }
-
-            // Minimum kills input
-            ImGui.InputInt("Minimum Kills", ref minimumKills);
-            if (minimumKills < 0) minimumKills = 0;
-
-            // Options
-            ImGui.Checkbox("Show Notification", ref showNotification);
-            if (ImGui.Checkbox("Auto-Kick (Not Recommended)", ref autoKick))
-            {
-                if (autoKick)
+                else
                 {
-                    ImGui.OpenPopup("AddKickWarningPopup");
+                    ImGui.TextColored(ImGuiColors.DalamudGrey, "No thresholds configured. Add one below.");
                 }
-            }
 
-            // Warning popup for auto-kick
-            if (ImGui.BeginPopup("AddKickWarningPopup"))
-            {
-                ImGui.TextColored(ImGuiColors.DalamudRed, "Warning!");
-                ImGui.Text("Auto-kicking players may be against FFXIV's Terms of Service\n" +
-                          "and can be considered toxic behavior. Are you sure?");
+                ImGui.Separator();
+                ImGui.Text("Add New Threshold");
 
-                if (ImGui.Button("Yes, Enable Auto-Kick"))
+                // Select encounter.
+                if (ImGui.BeginCombo("Encounter", selectedEncounterName == string.Empty ? "Select an encounter" : selectedEncounterName))
                 {
-                    autoKick = true;
-                    ImGui.CloseCurrentPopup();
+                    var encountersList = Service.Configuration.Layout
+                        .Where(entry => entry.Type == LayoutEntryType.Encounter)
+                        .OrderBy(entry => entry.Expansion)
+                        .ThenBy(entry => entry.Zone);
+
+                    foreach (var entry in encountersList)
+                    {
+                        string encounterDisplay = $"{entry.Encounter} ({entry.Zone})";
+                        if (ImGui.Selectable(encounterDisplay))
+                        {
+                            selectedEncounterId = entry.EncounterId;
+                            selectedEncounterName = entry.Encounter;
+                        }
+                    }
+                    ImGui.EndCombo();
                 }
-                ImGui.SameLine();
-                if (ImGui.Button("Cancel"))
+
+                // Minimum kills input.
+                ImGui.InputInt("Minimum Kills", ref minimumKills);
+                if (minimumKills < 0) minimumKills = 0;
+
+                // Options.
+                ImGui.Checkbox("Show Notification", ref showNotification);
+                if (ImGui.Checkbox("Auto-Kick (Not Recommended)", ref autoKick))
                 {
+                    if (autoKick)
+                    {
+                        ImGui.OpenPopup("AddKickWarningPopup");
+                    }
+                }
+
+                // Warning popup for auto-kick when adding a new threshold.
+                if (ImGui.BeginPopup("AddKickWarningPopup"))
+                {
+                    ImGui.TextColored(ImGuiColors.DalamudRed, "Warning!");
+                    ImGui.Text("Auto-kicking players may be against FFXIV's Terms of Service\n" +
+                              "and can be considered toxic behavior. Are you sure?");
+                    if (ImGui.Button("Yes, Enable Auto-Kick"))
+                    {
+                        autoKick = true;
+                        ImGui.CloseCurrentPopup();
+                    }
+                    ImGui.SameLine();
+                    if (ImGui.Button("Cancel"))
+                    {
+                        autoKick = false;
+                        ImGui.CloseCurrentPopup();
+                    }
+                    ImGui.EndPopup();
+                }
+
+                // Button to add a new threshold entry.
+                ImGui.BeginDisabled(selectedEncounterId == -1);
+                if (ImGui.Button("Add Threshold"))
+                {
+                    settings.Thresholds.Add(new KillThreshold
+                    {
+                        EncounterId = selectedEncounterId,
+                        EncounterName = selectedEncounterName,
+                        MinimumKills = minimumKills,
+                        ShowNotification = showNotification,
+                        AutoKick = autoKick
+                    });
+
+                    // Reset form values.
+                    selectedEncounterId = -1;
+                    selectedEncounterName = string.Empty;
+                    minimumKills = 1;
+                    showNotification = true;
                     autoKick = false;
-                    ImGui.CloseCurrentPopup();
+
+                    hasChanged = true;
                 }
+                ImGui.EndDisabled();
 
-                ImGui.EndPopup();
+                ImGui.Unindent();
             }
 
-            // Add button
-            ImGui.BeginDisabled(selectedEncounterId == -1);
-            if (ImGui.Button("Add Threshold"))
+            if (hasChanged)
             {
-                settings.Thresholds.Add(new KillThreshold
-                {
-                    EncounterId = selectedEncounterId,
-                    EncounterName = selectedEncounterName,
-                    MinimumKills = minimumKills,
-                    ShowNotification = showNotification,
-                    AutoKick = autoKick
-                });
-
-                // Reset form
-                selectedEncounterId = -1;
-                selectedEncounterName = string.Empty;
-                minimumKills = 1;
-                showNotification = true;
-                autoKick = false;
-
-                hasChanged = true;
+                Service.Configuration.Save();
             }
-            ImGui.EndDisabled();
-
-            ImGui.Unindent();
-        }
-
-        if (hasChanged)
-        {
-            Service.Configuration.Save();
         }
     }
 }

@@ -1,9 +1,8 @@
-// Import all required namespaces.
 using System;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using System.Reflection; // Needed for reflection in the target case.
+using System.Reflection;
 using Dalamud.Game.Command;
 using Dalamud.Game.Text;
 using Dalamud.Game.Text.SeStringHandling;
@@ -174,16 +173,16 @@ namespace FFLogsViewer
                 var message = new SeStringBuilder()
                     .AddText(playerName)
                     .AddText($" @ {world} - Encounter #{encounterId} ({metric})")
-                    .AddText("\n")  // Newline character.
+                    .AddText("\n")
                     .AddText("Best Parse: ");
 
                 // If a best parse exists, format it with an appropriate UI color.
                 if (bestParse.HasValue)
                 {
-                    // Cast uint to ushort for AddUiForeground.
+                    // Convert parse color to a ushort for the UI foreground method.
                     message.AddUiForeground((ushort)GetParseColor(bestParse.Value))
-                        .AddText($"{bestParse.Value:F1}%")
-                        .AddUiForegroundOff();
+                           .AddText($"{bestParse.Value:F1}%")
+                           .AddUiForegroundOff();
                 }
                 else
                 {
@@ -192,7 +191,7 @@ namespace FFLogsViewer
 
                 // Append the kill count to the message.
                 message.AddText(" | Kills: ")
-                    .AddText(kills.HasValue ? kills.Value.ToString() : "0");
+                       .AddText(kills.HasValue ? kills.Value.ToString() : "0");
 
                 // Print the built message to the chat.
                 Service.ChatGui.Print(message.Build());
@@ -223,7 +222,6 @@ namespace FFLogsViewer
             switch (argParts[0].ToLower())
             {
                 case "check":
-                    // Ensure that there are enough arguments for the 'check' subcommand.
                     if (argParts.Length < 3)
                     {
                         Service.ChatGui.PrintError("Usage: /ffthreshold check \"First Last\" World");
@@ -233,10 +231,8 @@ namespace FFLogsViewer
                     string playerName = argParts[1];
                     string world = argParts[2];
 
-                    // Check if the player name is provided in quotes and handle reconstruction if needed.
                     if (playerName.StartsWith("\"") && !playerName.EndsWith("\""))
                     {
-                        // Find the index of the closing quote.
                         int nameEndIndex = -1;
                         for (int i = 2; i < argParts.Length; i++)
                         {
@@ -251,17 +247,13 @@ namespace FFLogsViewer
                             Service.ChatGui.PrintError("Player name must be in quotes.");
                             return;
                         }
-                        // Reconstruct the full player name from the split parts.
                         StringBuilder sb = new StringBuilder();
                         for (int i = 1; i <= nameEndIndex; i++)
                         {
                             if (i > 1) sb.Append(' ');
                             sb.Append(argParts[i]);
                         }
-                        playerName = sb.ToString();
-                        // Remove surrounding quotes.
-                        playerName = playerName.Trim('"');
-                        // The world is expected as the next argument.
+                        playerName = sb.ToString().Trim('"');
                         if (nameEndIndex + 1 < argParts.Length)
                         {
                             world = argParts[nameEndIndex + 1];
@@ -273,7 +265,6 @@ namespace FFLogsViewer
                         }
                     }
 
-                    // Split the player name into first and last name.
                     var nameParts = playerName.Split(' ', 2);
                     if (nameParts.Length < 2)
                     {
@@ -282,12 +273,13 @@ namespace FFLogsViewer
                     }
 
                     Service.ChatGui.Print($"Checking thresholds for {playerName}@{world}...");
-                    // Manually trigger the kill threshold check for the specified player.
-                    Service.ThresholdManager.CheckPlayerKills(nameParts[0], nameParts[1], world).ConfigureAwait(false);
+                    // This calls the threshold manager's method, which will run the full ForceCheckKillThresholds
+                    // (thus iterating over the entire party). In your updated code, you might add a separate
+                    // method for single-player checks if you truly wish to check *only* that player.
+                    Service.ThresholdManager.CheckPlayerKills(nameParts[0], nameParts[1], world);
                     break;
 
                 case "target":
-                    // Retrieve the current target.
                     var target = Service.TargetManager.Target;
                     if (target == null)
                     {
@@ -295,7 +287,6 @@ namespace FFLogsViewer
                         return;
                     }
 
-                    // Use reflection to access the target's nonpublic 'Name' property.
                     var nameProperty = target.GetType().GetProperty("Name", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                     if (nameProperty == null)
                     {
@@ -309,7 +300,6 @@ namespace FFLogsViewer
                         Service.ChatGui.PrintError("Target name is empty.");
                         return;
                     }
-                    // Split the target's name into parts.
                     var playerNameParts = targetName.Split(' ');
                     if (playerNameParts.Length < 2)
                     {
@@ -319,7 +309,6 @@ namespace FFLogsViewer
                     string targetFirstName = playerNameParts[0];
                     string targetLastName = playerNameParts[1];
 
-                    // Retrieve the target's home world via reflection.
                     var homeWorldProperty = target.GetType().GetProperty("HomeWorld", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                     if (homeWorldProperty == null)
                     {
@@ -329,24 +318,21 @@ namespace FFLogsViewer
                     object homeWorldValue = homeWorldProperty.GetValue(target);
                     string targetWorld = homeWorldValue?.ToString() ?? "";
                     Service.ChatGui.Print($"Checking thresholds for {targetFirstName} {targetLastName}@{targetWorld}...");
-
-                    // Manually trigger the kill threshold check for the target.
-                    Service.ThresholdManager.CheckPlayerKills(targetFirstName, targetLastName, targetWorld).ConfigureAwait(false);
+                    Service.ThresholdManager.CheckPlayerKills(targetFirstName, targetLastName, targetWorld);
                     break;
 
                 case "party":
                     Service.ChatGui.Print("Checking thresholds for all party members...");
-                    // Update the team list.
+                    // In your code, you might do an explicit loop. However,
+                    // here we just call a single method that ends up calling ForceCheckKillThresholds anyway.
                     Service.TeamManager.UpdateTeamList();
-                    // Process kill threshold checks for each party member.
                     foreach (var member in Service.TeamManager.TeamList)
                     {
-                        Service.ThresholdManager.CheckPlayerKills(member.FirstName, member.LastName, member.World).ConfigureAwait(false);
+                        Service.ThresholdManager.CheckPlayerKills(member.FirstName, member.LastName, member.World);
                     }
                     break;
 
                 case "debug":
-                    // Display debug information regarding kill threshold configuration.
                     Service.ChatGui.Print("------ Kill Threshold Debug Info ------");
                     Service.ChatGui.Print($"Feature enabled: {Service.Configuration.KillThresholds.EnableKillChecking}");
                     Service.ChatGui.Print($"Check on party join: {Service.Configuration.KillThresholds.CheckOnPartyJoin}");
@@ -356,7 +342,6 @@ namespace FFLogsViewer
                     {
                         Service.ChatGui.Print($"  - {threshold.EncounterName}: Min kills {threshold.MinimumKills}, Notify: {threshold.ShowNotification}, AutoKick: {threshold.AutoKick}");
                     }
-                    // Also display current party information.
                     Service.ChatGui.Print("------ Current Party Info ------");
                     Service.TeamManager.UpdateTeamList();
                     if (Service.TeamManager.TeamList.Count == 0)
@@ -379,18 +364,17 @@ namespace FFLogsViewer
             }
         }
 
-        // Helper method to determine the UI color based on the parse value.
         private static uint GetParseColor(float parse)
         {
             return parse switch
             {
                 >= 100 => 0xE6CC80,    // Gold
-                >= 99 => 0xE268A8,     // Pink
-                >= 95 => 0xFF8000,     // Orange
-                >= 75 => 0xA335EE,     // Purple
-                >= 50 => 0x0070DD,     // Blue
-                >= 25 => 0x1EFF00,     // Green
-                _ => 0x666666      // Gray
+                >= 99 => 0xE268A8,    // Pink
+                >= 95 => 0xFF8000,    // Orange
+                >= 75 => 0xA335EE,    // Purple
+                >= 50 => 0x0070DD,    // Blue
+                >= 25 => 0x1EFF00,    // Green
+                _ => 0x666666     // Gray
             };
         }
     }

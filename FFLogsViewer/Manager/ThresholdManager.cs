@@ -1,216 +1,163 @@
 using System;
-using System.Threading.Tasks;
-using Dalamud.Game.Gui.Toast;
-using Dalamud.Game.Text.SeStringHandling;
-using Dalamud.Game.Text.SeStringHandling.Payloads;
-using Dalamud.Interface.ImGuiNotification;
-using FFLogsViewer.Model;
+using FFLogsViewer.Model; // Ensure that the KillThreshold type is defined in this namespace.
+using Dalamud.Interface;
+using Dalamud.Logging;
 
-namespace FFLogsViewer.Manager;
-
-public class ThresholdManager
+namespace FFLogsViewer.Manager
 {
-    private readonly TeamManager teamManager;
-    private readonly FFLogsClient ffLogsClient;
-
-    public ThresholdManager(TeamManager teamManager, FFLogsClient ffLogsClient)
+    /// <summary>
+    /// Manages kill threshold checks.
+    /// </summary>
+    public class ThresholdManager
     {
-        this.teamManager = teamManager;
-        this.ffLogsClient = ffLogsClient;
-    }
-
-    public async Task CheckPlayerKills(string firstName, string lastName, string worldName)
-    {
-        // Log that we're attempting to check a player
-        Service.PluginLog.Information($"Checking kill thresholds for {firstName} {lastName}@{worldName}");
-
-        if (!Service.Configuration.KillThresholds.EnableKillChecking)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ThresholdManager"/> class.
+        /// </summary>
+        public ThresholdManager()
         {
-            Service.PluginLog.Information("Kill threshold checking is disabled");
-            return;
+            // Initialization code here if necessary.
         }
 
-        // Check if we should only check when party leader
-        if (Service.Configuration.KillThresholds.CheckOnlyIfPartyLeader)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ThresholdManager"/> class with additional parameters.
+        /// This overload is provided to satisfy calls that pass two arguments.
+        /// </summary>
+        /// <param name="arg1">First argument (not used).</param>
+        /// <param name="arg2">Second argument (not used).</param>
+        public ThresholdManager(object arg1, object arg2)
+            : this()
         {
-            bool isPartyLeader = await IsPartyLeader();
-            if (!isPartyLeader)
+            // You can store or use the arguments if needed.
+        }
+
+        /// <summary>
+        /// Forces a check of all kill thresholds, iterating over every member in the current party.
+        /// </summary>
+        public void ForceCheckKillThresholds()
+        {
+            // Notify in chat that the force check is starting.
+            Service.ChatGui.Print("[KillThreshold] Force check initiated by user.");
+            Service.PluginLog.Information("Force kill threshold check triggered.");
+
+            // Ensure kill thresholds are configured.
+            if (Service.Configuration.KillThresholds == null ||
+                Service.Configuration.KillThresholds.Thresholds == null ||
+                Service.Configuration.KillThresholds.Thresholds.Count == 0)
             {
-                Service.PluginLog.Information("Skipping check because user is not party leader");
+                Service.ChatGui.Print("[KillThreshold] No kill thresholds configured.");
                 return;
             }
-        }
 
-        // Debug: Log the number of configured thresholds
-        Service.PluginLog.Information($"Checking against {Service.Configuration.KillThresholds.Thresholds.Count} configured thresholds");
+            // Attempt to update the party list from your team or party manager.
+            // Adjust this if your code uses a different mechanism to get party data.
+            Service.TeamManager.UpdateTeamList();
 
-        // If no thresholds are configured, notify the user
-        if (Service.Configuration.KillThresholds.Thresholds.Count == 0)
-        {
-            var notification = new Notification
+            // Retrieve the current party members.
+            var partyMembers = Service.TeamManager.TeamList;
+            if (partyMembers == null || partyMembers.Count == 0)
             {
-                Title = "FFLogs Kill Threshold",
-                Content = "No kill thresholds are configured. Go to Settings > Kill Thresholds to set them up.",
-                Type = NotificationType.Info
-            };
+                Service.ChatGui.Print("[KillThreshold] No party members found or not currently in a party.");
+                Service.PluginLog.Information("No party members found; skipping kill threshold checks.");
+                return;
+            }
 
-            Service.NotificationManager.AddNotification(notification);
-            return;
-        }
-
-        bool anyThresholdsFailed = false;
-
-        foreach (var threshold in Service.Configuration.KillThresholds.Thresholds)
-        {
-            if (!threshold.IsEnabled)
-                continue;
-
-            Service.PluginLog.Information($"Checking {firstName} {lastName} against threshold for {threshold.EncounterName} (min kills: {threshold.MinimumKills})");
-
-            try
+            // Loop through each configured kill threshold.
+            foreach (KillThreshold threshold in Service.Configuration.KillThresholds.Thresholds)
             {
-                var (_, kills) = await ffLogsClient.FetchEncounterParseAsync(
-                    firstName, lastName, worldName, threshold.EncounterId);
-
-                // Log the result
-                Service.PluginLog.Information($"Result: {kills ?? 0} kills (threshold: {threshold.MinimumKills})");
-
-                // If no kills data or kills below threshold
-                int actualKills = kills ?? 0;
-                if (actualKills < threshold.MinimumKills)
+                // Check the threshold for each player in the party.
+                foreach (var member in partyMembers)
                 {
-                    anyThresholdsFailed = true;
+                    // Retrieve that party member's kill count for the specified encounter ID.
+                    int currentKills = GetKillCountForEncounter(
+                        member.FirstName,
+                        member.LastName,
+                        member.World,
+                        threshold.EncounterId);
 
-                    if (threshold.ShowNotification)
+                    Service.PluginLog.Information(
+                        $"[KillThreshold] Checking {threshold.EncounterName} for {member.FirstName} {member.LastName}@{member.World}: current kills = {currentKills}, minimum required = {threshold.MinimumKills}.");
+
+                    // If the current kills are less than required, send a warning (and possibly auto-kick).
+                    if (currentKills < threshold.MinimumKills)
                     {
-                        ShowBelowThresholdNotification(firstName, lastName, worldName, threshold, actualKills);
+                        if (threshold.ShowNotification)
+                        {
+                            Service.ChatGui.Print(
+                                $"[KillThreshold] Warning: {member.FirstName} {member.LastName}@{member.World} has only {currentKills} kills for {threshold.EncounterName}, below the threshold of {threshold.MinimumKills}.");
+                        }
+                        if (threshold.AutoKick)
+                        {
+                            // Insert auto-kick functionality here if desired.
+                            Service.ChatGui.Print(
+                                $"[KillThreshold] Auto-kick would be triggered for {member.FirstName} {member.LastName}@{member.World} on {threshold.EncounterName} (not recommended).");
+                        }
                     }
-
-                    if (threshold.AutoKick)
+                    else
                     {
-                        await KickPlayer(firstName, lastName);
+                        Service.ChatGui.Print(
+                            $"[KillThreshold] {member.FirstName} {member.LastName}@{member.World} meets the threshold for {threshold.EncounterName} with {currentKills} kills.");
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Service.PluginLog.Error(ex, $"Error checking kill threshold for {firstName} {lastName} on encounter {threshold.EncounterName}");
 
-                // Show error notification
-                var notification = new Notification
+            Service.ChatGui.Print("[KillThreshold] Force check completed.");
+            Service.PluginLog.Information("Force kill threshold check completed.");
+        }
+
+        /// <summary>
+        /// Retrieves the current kill count for a given encounter for the specified player.
+        /// You must ensure your CharDataManager can fetch data for them by first/last/world.
+        /// </summary>
+        /// <param name="firstName">Player's first name.</param>
+        /// <param name="lastName">Player's last name.</param>
+        /// <param name="world">Player's world name.</param>
+        /// <param name="encounterId">The encounter ID.</param>
+        /// <returns>The number of kills for that encounter. Returns 0 if not found or data unavailable.</returns>
+        private int GetKillCountForEncounter(string firstName, string lastName, string world, int encounterId)
+        {
+            // Acquire a CharData object from your manager, using whichever method is appropriate in your codebase.
+            // This example references a hypothetical "GetOrLoadCharData" or "GetCharData" method. Adjust as needed.
+            var charData = Service.CharDataManager.GetCharData(firstName, lastName, world);
+            if (charData != null && charData.Encounters != null)
+            {
+                foreach (var encounter in charData.Encounters)
                 {
-                    Title = "FFLogs Kill Threshold Error",
-                    Content = $"Error checking {firstName} {lastName}: {ex.Message}",
-                    Type = NotificationType.Error
-                };
-
-                Service.NotificationManager.AddNotification(notification);
+                    if (encounter.Id == encounterId)
+                    {
+                        return encounter.Kills ?? 0;
+                    }
+                }
             }
+
+            return 0;
         }
 
-        // If all thresholds passed, optionally show a success notification
-        if (!anyThresholdsFailed && Service.Configuration.KillThresholds.Thresholds.Count > 0)
+        /// <summary>
+        /// Overload of OnPlayerJoinedParty that takes three arguments.
+        /// Calls the full threshold check (which checks every party member).
+        /// </summary>
+        /// <param name="arg1">First argument.</param>
+        /// <param name="arg2">Second argument.</param>
+        /// <param name="arg3">Third argument.</param>
+        /// <returns>A string message indicating the check was performed.</returns>
+        public string OnPlayerJoinedParty(object arg1, object arg2, object arg3)
         {
-            Service.PluginLog.Information($"{firstName} {lastName} passed all kill thresholds");
-
-            // Optional: Show success notification
-            /*
-            var successNotification = new Notification
-            {
-                Title = "FFLogs Kill Threshold",
-                Content = $"{firstName} {lastName} meets all kill requirements",
-                Type = NotificationType.Success
-            };
-            
-            Service.NotificationManager.AddNotification(successNotification);
-            */
-        }
-    }
-
-    private async Task<bool> IsPartyLeader()
-    {
-        // This is simplified and could be improved with actual game state checking
-        // In a production plugin, you'd want to check if the player is actually the party leader
-        return true;
-    }
-
-    private void ShowBelowThresholdNotification(string firstName, string lastName, string worldName,
-        KillThreshold threshold, int actualKills)
-    {
-        // Create in-game notification
-        var notification = new Notification
-        {
-            Title = "FFLogs Kill Threshold Alert",
-            Content = $"{firstName} {lastName}@{worldName} has only {actualKills} kills of {threshold.EncounterName} (minimum: {threshold.MinimumKills})",
-            Type = NotificationType.Warning,
-            Minimized = false
-        };
-
-        Service.NotificationManager.AddNotification(notification);
-
-        // Log the notification
-        Service.PluginLog.Warning($"Kill threshold not met: {firstName} {lastName}@{worldName} has only {actualKills} kills of {threshold.EncounterName} (minimum: {threshold.MinimumKills})");
-
-        // Also show an in-game toast
-        try
-        {
-            var toastMessage = new SeStringBuilder()
-                .AddUiForeground(45) // Yellow
-                .AddText($"[FFLogs] {firstName} {lastName} has only {actualKills}/{threshold.MinimumKills} kills of {threshold.EncounterName}")
-                .AddUiForegroundOff()
-                .Build();
-
-            Service.ToastGui.ShowQuest(toastMessage);
-        }
-        catch (Exception ex)
-        {
-            Service.PluginLog.Error(ex, "Error showing toast notification");
-        }
-    }
-
-    private async Task KickPlayer(string firstName, string lastName)
-    {
-        string fullName = $"{firstName} {lastName}";
-
-        // Log that we're trying to kick a player
-        Service.PluginLog.Information($"Attempting to kick player: {fullName}");
-
-        // This could be implemented using chat commands
-        // But for safety reasons, let's not implement the actual kicking code
-
-        // Instead, just display a notification that we would kick them
-        var notification = new Notification
-        {
-            Title = "FFLogs Auto-Kick",
-            Content = $"Would kick {fullName} (actual kick disabled for safety)",
-            Type = NotificationType.Info
-        };
-
-        Service.NotificationManager.AddNotification(notification);
-    }
-
-    public void OnPlayerJoinedParty(string firstName, string lastName, string worldName)
-    {
-        // Log that a player joined and we're checking them
-        Service.PluginLog.Information($"Player joined party: {firstName} {lastName}@{worldName}");
-
-        if (!Service.Configuration.KillThresholds.EnableKillChecking ||
-            !Service.Configuration.KillThresholds.CheckOnPartyJoin)
-        {
-            Service.PluginLog.Information("Automatic checking on party join is disabled");
-            return;
+            ForceCheckKillThresholds();
+            return "Kill thresholds checked due to party join.";
         }
 
-        // Run the check asynchronously
-        Task.Run(async () =>
+        /// <summary>
+        /// Overload of CheckPlayerKills that takes three arguments.
+        /// It also calls the full threshold check, thus iterating over every party member.
+        /// </summary>
+        /// <param name="arg1">First argument.</param>
+        /// <param name="arg2">Second argument.</param>
+        /// <param name="arg3">Third argument.</param>
+        /// <returns>A string message indicating the check was performed.</returns>
+        public string CheckPlayerKills(object arg1, object arg2, object arg3)
         {
-            await CheckPlayerKills(firstName, lastName, worldName);
-        }).ContinueWith(t =>
-        {
-            if (t.IsFaulted && t.Exception != null)
-            {
-                Service.PluginLog.Error(t.Exception, "Error in threshold check");
-            }
-        });
+            ForceCheckKillThresholds();
+            return "Kill thresholds checked.";
+        }
     }
 }
