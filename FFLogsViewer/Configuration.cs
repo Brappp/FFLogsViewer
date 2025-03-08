@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Dalamud.Configuration;
 using FFLogsViewer.Model;
@@ -10,7 +10,7 @@ namespace FFLogsViewer;
 public class Configuration : IPluginConfiguration
 {
     [JsonIgnore]
-    public const int CurrentConfigVersion = 1;
+    public const int CurrentConfigVersion = 2; // Updated version number
     public int Version { get; set; } = CurrentConfigVersion;
     public string ClientId { get; set; } = string.Empty;
     public string ClientSecret { get; set; } = string.Empty;
@@ -37,6 +37,9 @@ public class Configuration : IPluginConfiguration
     public Style Style { get; set; } = new();
     public OpenWith OpenWith { get; set; } = new();
     public bool IsUpdateDismissed2213 { get; set; }
+
+    // Added for the kill threshold feature
+    public KillThresholdSettings KillThresholds { get; set; } = new();
 
     public void Save()
     {
@@ -70,6 +73,18 @@ public class Configuration : IPluginConfiguration
                 {
                     this.Stats.Add(defaultStats[i]);
                 }
+            }
+
+            this.Version++;
+            this.Save();
+        }
+
+        // Add KillThresholds if upgrading from version 1
+        if (this.Version == 1)
+        {
+            if (this.KillThresholds == null)
+            {
+                this.KillThresholds = new KillThresholdSettings();
             }
 
             this.Version++;

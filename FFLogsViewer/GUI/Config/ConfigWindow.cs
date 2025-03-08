@@ -1,4 +1,4 @@
-﻿using Dalamud.Interface.Windowing;
+using Dalamud.Interface.Windowing;
 using ImGuiNET;
 
 namespace FFLogsViewer.GUI.Config;
@@ -6,6 +6,7 @@ namespace FFLogsViewer.GUI.Config;
 public class ConfigWindow : Window
 {
     public LayoutTab LayoutTab = new();
+    public ThresholdsTab ThresholdsTab = new();
 
     public ConfigWindow()
         : base("Configuration##FFLogsViewerConfigWindow")
@@ -46,6 +47,12 @@ public class ConfigWindow : Window
         if (ImGui.BeginTabItem("Open With"))
         {
             OpenWithTab.Draw();
+            ImGui.EndTabItem();
+        }
+
+        if (ImGui.BeginTabItem("Kill Thresholds"))
+        {
+            this.ThresholdsTab.Draw();
             ImGui.EndTabItem();
         }
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -14,7 +14,7 @@ using Newtonsoft.Json.Linq;
 
 namespace FFLogsViewer;
 
-public class FFLogsClient
+public class FFLogsClient : IDisposable
 {
     public volatile bool IsTokenValid;
     public int LimitPerHour;
@@ -26,6 +26,7 @@ public class FFLogsClient
     private volatile bool isRateLimitDataLoading;
     private volatile int rateLimitDataFetchAttempts = 5;
     private DateTime? lastCacheRefresh;
+    private bool disposedValue;
 
     public class Token
     {
@@ -45,7 +46,6 @@ public class FFLogsClient
     public FFLogsClient()
     {
         this.httpClient = new HttpClient();
-
         this.SetToken();
     }
 
@@ -97,6 +97,60 @@ public class FFLogsClient
                 Service.PluginLog.Error($"FF Logs token couldn't be set: {(token == null ? "return was null" : token.Error)}");
             }
         });
+    }
+
+    /// <summary>
+    /// Refresh the FFLogs API access token using OAuth2 client credentials.
+    /// </summary>
+    /// <param name="clientId">The FFLogs Client ID from configuration.</param>
+    /// <param name="clientSecret">The FFLogs Client Secret from configuration.</param>
+    /// <returns>True if a valid token is obtained; otherwise false.</returns>
+    public async Task<bool> RefreshAccessTokenAsync(string clientId, string clientSecret)
+    {
+        try
+        {
+            string tokenUrl = "https://www.fflogs.com/oauth/token";
+
+            // Prepare the form data for the client credentials grant.
+            var form = new Dictionary<string, string>
+            {
+                { "grant_type", "client_credentials" },
+                { "client_id", clientId },
+                { "client_secret", clientSecret }
+            };
+
+            HttpResponseMessage tokenResponse = await httpClient.PostAsync(tokenUrl, new FormUrlEncodedContent(form));
+            if (!tokenResponse.IsSuccessStatusCode)
+            {
+                Service.PluginLog.Error($"FFLogs token request failed with status code: {tokenResponse.StatusCode}");
+                IsTokenValid = false;
+                return false;
+            }
+
+            string responseContent = await tokenResponse.Content.ReadAsStringAsync();
+            Token? tokenData = JsonConvert.DeserializeObject<Token>(responseContent);
+            if (tokenData != null && !string.IsNullOrEmpty(tokenData.AccessToken))
+            {
+                // Set the Bearer token in the default request headers.
+                httpClient.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue("Bearer", tokenData.AccessToken);
+                IsTokenValid = true;
+                Service.PluginLog.Debug("FFLogs API access token obtained successfully.");
+                return true;
+            }
+            else
+            {
+                Service.PluginLog.Error("Failed to parse FFLogs access token.");
+                IsTokenValid = false;
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Service.PluginLog.Error(ex, "Exception while refreshing FFLogs access token.");
+            IsTokenValid = false;
+            return false;
+        }
     }
 
     public async Task FetchGameData()
@@ -168,6 +222,147 @@ public class FFLogsClient
         {
             Service.PluginLog.Error(ex, "Error while fetching data.");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Fetch character data from the FFLogs API using a GraphQL query.
+    /// The query retrieves the encounter rankings (including best parse percent and kill count)
+    /// for a given fight (encounter).
+    /// </summary>
+    /// <param name="playerName">Character name.</param>
+    /// <param name="serverSlug">Server slug (e.g. "Midgardsormr").</param>
+    /// <param name="serverRegion">Region (e.g. "NA", "EU", "JP").</param>
+    /// <param name="encounterId">The numeric encounter ID for the fight.</param>
+    /// <returns>A JSON string containing the API response, or null on failure.</returns>
+    public async Task<string?> FetchCharacterDataAsync(string playerName, string serverSlug, string serverRegion, int encounterId)
+    {
+        if (!IsTokenValid)
+        {
+            Service.PluginLog.Error("Access token is not valid. Cannot fetch character data.");
+            return null;
+        }
+
+        try
+        {
+            // Build the GraphQL query.
+            string graphqlQuery = $@"
+{{
+  characterData {{
+    character(name: ""{playerName}"", serverSlug: ""{serverSlug}"", serverRegion: ""{serverRegion}"") {{
+      encounterRankings(encounterID: {encounterId}) {{
+        rankings {{
+          rankPercent
+        }}
+        total
+      }}
+    }}
+  }}
+}}";
+
+            // Wrap the query into a JSON payload.
+            var payload = new { query = graphqlQuery };
+            string jsonPayload = JsonConvert.SerializeObject(payload);
+
+            // Send the POST request to the FFLogs GraphQL endpoint.
+            HttpResponseMessage response = await httpClient.PostAsync("https://www.fflogs.com/api/v2/client", new StringContent(jsonPayload, Encoding.UTF8, "application/json"));
+            if (!response.IsSuccessStatusCode)
+            {
+                Service.PluginLog.Error($"FFLogs API query failed with status code: {response.StatusCode}");
+                return null;
+            }
+
+            string responseJson = await response.Content.ReadAsStringAsync();
+            return responseJson;
+        }
+        catch (Exception ex)
+        {
+            Service.PluginLog.Error(ex, "Exception while fetching character data from FFLogs API.");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Fetch a player's best parse and kill count for a specific encounter.
+    /// </summary>
+    /// <param name="firstName">Character first name.</param>
+    /// <param name="lastName">Character last name.</param>
+    /// <param name="worldName">Character world/server name.</param>
+    /// <param name="encounterId">The encounter ID to query.</param>
+    /// <param name="difficultyId">The difficulty ID (default: 100 for normal).</param>
+    /// <param name="metric">The metric to use (e.g. "rdps", "dps", etc.).</param>
+    /// <returns>A tuple containing the best parse percentage and kill count, or null values if data couldn't be retrieved.</returns>
+    public async Task<(float? BestParse, int? Kills)> FetchEncounterParseAsync(
+        string firstName, string lastName, string worldName, int encounterId, int difficultyId = 100, string metric = "rdps")
+    {
+        if (!this.IsTokenValid)
+        {
+            Service.PluginLog.Error("FFLogs token is not valid.");
+            return (null, null);
+        }
+
+        try
+        {
+            var regionName = CharDataManager.GetRegionCode(worldName);
+            if (string.IsNullOrEmpty(regionName))
+            {
+                Service.PluginLog.Error("Invalid world name or region not found.");
+                return (null, null);
+            }
+
+            string graphqlQuery = $@"
+            {{
+              characterData {{
+                character(name: ""{firstName} {lastName}"", serverSlug: ""{worldName}"", serverRegion: ""{regionName}"") {{
+                  encounterRankings(encounterID: {encounterId}, metric: {metric}, difficulty: {difficultyId}) {{
+                    totalKills
+                    rankings {{
+                      rankPercent
+                    }}
+                  }}
+                }}
+              }}
+            }}";
+
+            // Wrap the query into a JSON payload
+            var payload = new { query = graphqlQuery };
+            string jsonPayload = JsonConvert.SerializeObject(payload);
+
+            // Send the POST request to the FFLogs GraphQL endpoint
+            HttpResponseMessage response = await this.httpClient.PostAsync(
+                "https://www.fflogs.com/api/v2/client",
+                new StringContent(jsonPayload, Encoding.UTF8, "application/json"));
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Service.PluginLog.Error($"FFLogs API query failed with status code: {response.StatusCode}");
+                return (null, null);
+            }
+
+            string responseJson = await response.Content.ReadAsStringAsync();
+            JObject responseObj = JObject.Parse(responseJson);
+
+            var parseData = responseObj["data"]?["characterData"]?["character"]?["encounterRankings"];
+            if (parseData == null || parseData["rankings"] == null)
+            {
+                Service.PluginLog.Error("No parse data found for this character and encounter.");
+                return (null, null);
+            }
+
+            float? bestParse = null;
+            if (parseData["rankings"].HasValues)
+            {
+                bestParse = parseData["rankings"].First["rankPercent"]?.Value<float>();
+            }
+
+            int? totalKills = parseData["totalKills"]?.Value<int>();
+
+            return (bestParse, totalKills);
+        }
+        catch (Exception ex)
+        {
+            Service.PluginLog.Error(ex, "Error fetching parse data from FFLogs.");
+            return (null, null);
         }
     }
 
@@ -354,5 +549,23 @@ public class FFLogsClient
         }
 
         return null;
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!disposedValue)
+        {
+            if (disposing)
+            {
+                httpClient.Dispose();
+            }
+            disposedValue = true;
+        }
+    }
+
+    public void Dispose()
+    {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
     }
 }

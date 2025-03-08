@@ -1,4 +1,4 @@
-﻿using Dalamud.Game;
+using Dalamud.Game;
 using Dalamud.Game.ClientState.Objects;
 using Dalamud.IoC;
 using Dalamud.Plugin;
@@ -23,6 +23,7 @@ internal class Service
     internal static OpenWithManager OpenWithManager { get; set; } = null!;
     internal static TeamManager TeamManager { get; set; } = null!;
     internal static FFLogsClient FFLogsClient { get; set; } = null!;
+    internal static ThresholdManager ThresholdManager { get; set; } = null!;
 
     [PluginService] internal static IDalamudPluginInterface Interface { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
@@ -42,4 +43,5 @@ internal class Service
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
     [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
+    [PluginService] internal static IToastGui ToastGui { get; private set; } = null!;
 }
