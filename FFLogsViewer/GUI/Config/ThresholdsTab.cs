@@ -56,7 +56,15 @@ namespace FFLogsViewer.GUI.Config
                     settings.CheckOnPartyJoin = checkOnPartyJoin;
                     hasChanged = true;
                 }
-                Util.DrawHelp("This prevents notifications when you join other people's parties.");
+                Util.DrawHelp("When enabled, the system will automatically check thresholds when party composition changes.\nA window will pop up showing results for each party member.");
+
+                // Test button
+                if (ImGui.Button("Test Party Detection"))
+                {
+                    Service.ChatGui.Print("[KillThreshold] Testing party threshold detection...");
+                    Service.ThresholdManager.ForceCheckKillThresholds();
+                }
+                Util.DrawHelp("Click to manually test threshold checking for current party members.");
 
                 ImGui.Separator();
                 ImGui.Text("Configured Thresholds:");

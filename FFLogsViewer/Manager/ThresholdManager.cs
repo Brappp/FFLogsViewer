@@ -1,7 +1,9 @@
 using System;
-using FFLogsViewer.Model; // Ensure that the KillThreshold type is defined in this namespace.
+using System.Linq;
+using FFLogsViewer.Model;
 using Dalamud.Interface;
 using Dalamud.Logging;
+using FFLogsViewer.GUI.Config;
 
 namespace FFLogsViewer.Manager
 {
@@ -10,12 +12,14 @@ namespace FFLogsViewer.Manager
     /// </summary>
     public class ThresholdManager
     {
+        private ThresholdCheckWindow? thresholdCheckWindow;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="ThresholdManager"/> class.
         /// </summary>
         public ThresholdManager()
         {
-            // Initialization code here if necessary.
+            // The window will be created on-demand
         }
 
         /// <summary>
@@ -31,13 +35,53 @@ namespace FFLogsViewer.Manager
         }
 
         /// <summary>
+        /// Opens the threshold check window.
+        /// </summary>
+        /// <param name="runCheck">If true, runs a check immediately upon opening.</param>
+        public void OpenThresholdCheckWindow(bool runCheck = false)
+        {
+            // Find the window in WindowSystem instead of creating a new one
+            var windowSystem = Service.Interface.UiBuilder.Windows;
+            thresholdCheckWindow = windowSystem.Windows.FirstOrDefault(w => w is ThresholdCheckWindow) as ThresholdCheckWindow;
+
+            if (thresholdCheckWindow == null)
+            {
+                Service.PluginLog.Warning("Could not find ThresholdCheckWindow in WindowSystem");
+                // This should not happen as window is registered in FFLogsViewer constructor
+                return;
+            }
+
+            thresholdCheckWindow.IsOpen = true;
+            Service.ChatGui.Print("[KillThreshold] Opening threshold check window.");
+
+            if (runCheck)
+            {
+                Service.ChatGui.Print("[KillThreshold] Running threshold check...");
+                ForceCheckKillThresholds(thresholdCheckWindow);
+            }
+        }
+
+        /// <summary>
         /// Forces a check of all kill thresholds, iterating over every member in the current party.
         /// </summary>
-        public void ForceCheckKillThresholds()
+        public void ForceCheckKillThresholds(ThresholdCheckWindow? windowToUpdate = null)
         {
-            // Notify in chat that the force check is starting.
-            Service.ChatGui.Print("[KillThreshold] Force check initiated by user.");
-            Service.PluginLog.Information("Force kill threshold check triggered.");
+            // Only notify in chat if not updating a window directly
+            if (windowToUpdate == null)
+            {
+                Service.ChatGui.Print("[KillThreshold] Force check initiated.");
+                Service.PluginLog.Information("Force kill threshold check triggered.");
+            }
+
+            // Find the window if not provided
+            if (windowToUpdate == null)
+            {
+                var windowSystem = Service.Interface.UiBuilder.Windows;
+                windowToUpdate = windowSystem.Windows.FirstOrDefault(w => w is ThresholdCheckWindow) as ThresholdCheckWindow;
+            }
+
+            // If updating a window, clear existing data
+            windowToUpdate?.ClearKillCounts();
 
             // Ensure kill thresholds are configured.
             if (Service.Configuration.KillThresholds == null ||
@@ -49,7 +93,6 @@ namespace FFLogsViewer.Manager
             }
 
             // Attempt to update the party list from your team or party manager.
-            // Adjust this if your code uses a different mechanism to get party data.
             Service.TeamManager.UpdateTeamList();
 
             // Retrieve the current party members.
@@ -61,47 +104,100 @@ namespace FFLogsViewer.Manager
                 return;
             }
 
-            // Loop through each configured kill threshold.
-            foreach (KillThreshold threshold in Service.Configuration.KillThresholds.Thresholds)
+            // Count how many members pass/fail
+            int passCount = 0;
+            int failCount = 0;
+
+            // Loop through each party member
+            foreach (var member in partyMembers)
             {
-                // Check the threshold for each player in the party.
-                foreach (var member in partyMembers)
+                bool hasFailedAnyThreshold = false;
+                string playerFullName = $"{member.FirstName} {member.LastName}";
+
+                // Check each threshold for this player
+                foreach (KillThreshold threshold in Service.Configuration.KillThresholds.Thresholds)
                 {
-                    // Retrieve that party member's kill count for the specified encounter ID.
+                    // Retrieve kill count for this encounter
                     int currentKills = GetKillCountForEncounter(
                         member.FirstName,
                         member.LastName,
                         member.World,
                         threshold.EncounterId);
 
-                    Service.PluginLog.Information(
-                        $"[KillThreshold] Checking {threshold.EncounterName} for {member.FirstName} {member.LastName}@{member.World}: current kills = {currentKills}, minimum required = {threshold.MinimumKills}.");
+                    // Update the window with this data if we have one
+                    windowToUpdate?.UpdatePlayerKillCount(playerFullName, member.World, threshold.EncounterId, currentKills);
 
-                    // If the current kills are less than required, send a warning (and possibly auto-kick).
+                    // Log the check details
+                    Service.PluginLog.Information(
+                        $"[KillThreshold] Checking {threshold.EncounterName} for {playerFullName}@{member.World}: " +
+                        $"current kills = {currentKills}, minimum required = {threshold.MinimumKills}.");
+
+                    // If the current kills are less than required, send a warning
                     if (currentKills < threshold.MinimumKills)
                     {
-                        if (threshold.ShowNotification)
+                        hasFailedAnyThreshold = true;
+
+                        if (threshold.ShowNotification && windowToUpdate == null)
                         {
                             Service.ChatGui.Print(
-                                $"[KillThreshold] Warning: {member.FirstName} {member.LastName}@{member.World} has only {currentKills} kills for {threshold.EncounterName}, below the threshold of {threshold.MinimumKills}.");
+                                $"[KillThreshold] {playerFullName}@{member.World} has only {currentKills}/{threshold.MinimumKills} kills " +
+                                $"for {threshold.EncounterName}.");
                         }
+
+                        // Auto-kick functionality if enabled
                         if (threshold.AutoKick)
                         {
-                            // Insert auto-kick functionality here if desired.
-                            Service.ChatGui.Print(
-                                $"[KillThreshold] Auto-kick would be triggered for {member.FirstName} {member.LastName}@{member.World} on {threshold.EncounterName} (not recommended).");
+                            if (windowToUpdate == null)
+                            {
+                                Service.ChatGui.Print(
+                                    $"[KillThreshold] Auto-kick triggered for {playerFullName}@{member.World} " +
+                                    $"(insufficient kills for {threshold.EncounterName})");
+                            }
+
+                            if (threshold.AutoKick)
+                            {
+                                // Only execute the kick command if auto-kick is enabled
+                                Service.CommandManager.ProcessCommand($"/kick {member.FirstName} {member.LastName}");
+                            }
                         }
                     }
-                    else
+                }
+
+                // Track overall pass/fail for summary
+                if (hasFailedAnyThreshold)
+                {
+                    failCount++;
+                }
+                else
+                {
+                    passCount++;
+                    if (windowToUpdate == null)
                     {
                         Service.ChatGui.Print(
-                            $"[KillThreshold] {member.FirstName} {member.LastName}@{member.World} meets the threshold for {threshold.EncounterName} with {currentKills} kills.");
+                            $"[KillThreshold] {playerFullName}@{member.World} meets all thresholds.");
                     }
                 }
             }
 
-            Service.ChatGui.Print("[KillThreshold] Force check completed.");
-            Service.PluginLog.Information("Force kill threshold check completed.");
+            // Print summary to chat (only if not updating a window directly)
+            if (windowToUpdate == null)
+            {
+                Service.ChatGui.Print(
+                    $"[KillThreshold] Check complete: {passCount} members pass, {failCount} members fail requirements.");
+
+                // Open the threshold check window if people have failed
+                if (failCount > 0)
+                {
+                    Service.ChatGui.Print(
+                        $"[KillThreshold] Opening threshold check window to display results.");
+                    OpenThresholdCheckWindow(false); // Don't run check again, we just did it
+                }
+                else
+                {
+                    // Still open window even if all pass
+                    OpenThresholdCheckWindow(false);
+                }
+            }
         }
 
         /// <summary>
@@ -116,7 +212,6 @@ namespace FFLogsViewer.Manager
         private int GetKillCountForEncounter(string firstName, string lastName, string world, int encounterId)
         {
             // Acquire a CharData object from your manager, using whichever method is appropriate in your codebase.
-            // This example references a hypothetical "GetOrLoadCharData" or "GetCharData" method. Adjust as needed.
             var charData = Service.CharDataManager.GetCharData(firstName, lastName, world);
             if (charData != null && charData.Encounters != null)
             {
@@ -142,6 +237,10 @@ namespace FFLogsViewer.Manager
         /// <returns>A string message indicating the check was performed.</returns>
         public string OnPlayerJoinedParty(object arg1, object arg2, object arg3)
         {
+            if (!Service.Configuration.KillThresholds.EnableKillChecking ||
+                !Service.Configuration.KillThresholds.CheckOnPartyJoin)
+                return "Kill threshold checking disabled.";
+
             ForceCheckKillThresholds();
             return "Kill thresholds checked due to party join.";
         }

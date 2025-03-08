@@ -41,9 +41,14 @@ public sealed class FFLogsViewer : IDalamudPlugin
 
         Service.MainWindow = new MainWindow();
         Service.ConfigWindow = new ConfigWindow();
+
         this.windowSystem = new WindowSystem("FFLogsViewer");
         this.windowSystem.AddWindow(Service.ConfigWindow);
         this.windowSystem.AddWindow(Service.MainWindow);
+
+        // Add the threshold check window to the WindowSystem
+        var thresholdCheckWindow = new ThresholdCheckWindow();
+        this.windowSystem.AddWindow(thresholdCheckWindow);
 
         ContextMenu.Enable();
 
@@ -92,7 +97,8 @@ public sealed class FFLogsViewer : IDalamudPlugin
     private void OnFrameworkUpdate(IFramework framework)
     {
         // Skip if kill threshold checking is disabled
-        if (!Service.Configuration.KillThresholds.EnableKillChecking)
+        if (!Service.Configuration.KillThresholds.EnableKillChecking ||
+            !Service.Configuration.KillThresholds.CheckOnPartyJoin)
             return;
 
         // Only check periodically (every ~2 seconds)
@@ -102,20 +108,16 @@ public sealed class FFLogsViewer : IDalamudPlugin
 
         lastCheckTime = currentTime;
 
-        // Skip if not in party or not in an instance
+        // Skip if not playing
         if (Service.ClientState.LocalPlayer == null)
-            return;
-
-        // Check if we're in an instance (not in overworld)
-        bool isInInstance = Service.Condition[ConditionFlag.BoundByDuty] ||
-                            Service.Condition[ConditionFlag.BetweenAreas] ||
-                            Service.Condition[ConditionFlag.InCombat];
-
-        if (!isInInstance)
             return;
 
         // Update team list to get current party members
         Service.TeamManager.UpdateTeamList();
+
+        // Skip if not in a party
+        if (Service.TeamManager.TeamList.Count <= 1)
+            return;
 
         lock (partyLock)
         {
@@ -127,23 +129,32 @@ public sealed class FFLogsViewer : IDalamudPlugin
             // Skip the initial check to avoid false positives
             if (isInitialPartyCheck)
             {
+                Service.PluginLog.Debug("[KillThreshold] Initial party state recorded. Members: " + newPartyMembers.Count);
                 isInitialPartyCheck = false;
                 currentPartyMembers.Clear();
                 currentPartyMembers.UnionWith(newPartyMembers);
                 return;
             }
 
-            // Find new members (in new list but not in our tracking list)
-            var newMembers = newPartyMembers.Except(currentPartyMembers).ToList();
-
-            // Process new members
-            foreach (var newMember in newMembers)
+            // If party size changed, trigger a check
+            if (currentPartyMembers.Count != newPartyMembers.Count)
             {
-                var parts = newMember.Split('|');
-                if (parts.Length == 3)
+                Service.PluginLog.Debug($"[KillThreshold] Party size changed from {currentPartyMembers.Count} to {newPartyMembers.Count}");
+
+                // If new members have joined
+                if (newPartyMembers.Count > currentPartyMembers.Count)
                 {
-                    // Trigger threshold check for new party member
-                    Service.ThresholdManager.OnPlayerJoinedParty(parts[0], parts[1], parts[2]);
+                    // Find new members (in new list but not in our tracking list)
+                    var newMembers = newPartyMembers.Except(currentPartyMembers).ToList();
+
+                    if (newMembers.Count > 0)
+                    {
+                        Service.PluginLog.Debug($"[KillThreshold] New members detected: {newMembers.Count}");
+                        Service.ChatGui.Print($"[KillThreshold] New party members detected. Running kill threshold check.");
+
+                        // Trigger a full party check - will show window and results
+                        Service.ThresholdManager.ForceCheckKillThresholds();
+                    }
                 }
             }
 
@@ -168,8 +179,18 @@ public sealed class FFLogsViewer : IDalamudPlugin
     {
         lock (partyLock)
         {
+            Service.PluginLog.Debug("[KillThreshold] Resetting party tracking state");
             isInitialPartyCheck = true;
             currentPartyMembers.Clear();
+
+            // Force an update to set the new state
+            Service.TeamManager.UpdateTeamList();
+            if (Service.TeamManager.TeamList != null && Service.TeamManager.TeamList.Count > 0)
+            {
+                currentPartyMembers = new HashSet<string>(
+                    Service.TeamManager.TeamList.Select(m => $"{m.FirstName}|{m.LastName}|{m.World}")
+                );
+            }
         }
     }
 }

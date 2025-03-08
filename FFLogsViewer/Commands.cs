@@ -46,8 +46,10 @@ namespace FFLogsViewer
 
             Service.CommandManager.AddHandler(ThresholdCheckCommandName, new CommandInfo(OnCommand)
             {
-                HelpMessage = "Manually check kill thresholds for a player or the current target.\n" +
-                              "Usage: /ffthreshold check \"Name\" \"World\" - Check specific player\n" +
+                HelpMessage = "Check kill thresholds for party members.\n" +
+                              "Usage: /ffthreshold - Opens the threshold check window\n" +
+                              "       /ffthreshold window - Opens the threshold check window\n" +
+                              "       /ffthreshold check \"Name\" \"World\" - Check specific player\n" +
                               "       /ffthreshold target - Check current target\n" +
                               "       /ffthreshold party - Check all party members\n" +
                               "       /ffthreshold debug - Show debug info",
@@ -204,23 +206,34 @@ namespace FFLogsViewer
             // Split the command arguments by whitespace.
             var argParts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-            // If no subcommand is provided, print an error.
+            // If no subcommand is provided, open the window by default
             if (argParts.Length == 0)
             {
-                Service.ChatGui.PrintError("Please specify a subcommand: check, target, party, or debug");
+                Service.ThresholdManager.OpenThresholdCheckWindow(true);
                 return;
             }
 
-            // Verify that kill threshold checking is enabled.
-            if (!Service.Configuration.KillThresholds.EnableKillChecking)
+            // Even if threshold checking is disabled, still allow opening the window
+            if (!Service.Configuration.KillThresholds.EnableKillChecking &&
+                !(argParts.Length > 0 && (argParts[0].ToLower() == "ui" || argParts[0].ToLower() == "window" || argParts[0].ToLower() == "gui")))
             {
                 Service.ChatGui.PrintError("Kill threshold checking is disabled. Enable it in the FFLogs Viewer settings (Kill Thresholds tab).");
+
+                // Offer to open settings
+                Service.ChatGui.Print("[KillThreshold] Type '/ffthreshold window' to open the window anyway, or '/fflogsconfig' to open settings.");
                 return;
             }
 
             // Process the subcommand.
             switch (argParts[0].ToLower())
             {
+                case "window":
+                case "gui":
+                case "ui":
+                    // Open the threshold check window
+                    Service.ThresholdManager.OpenThresholdCheckWindow(true);
+                    break;
+
                 case "check":
                     if (argParts.Length < 3)
                     {
@@ -273,9 +286,8 @@ namespace FFLogsViewer
                     }
 
                     Service.ChatGui.Print($"Checking thresholds for {playerName}@{world}...");
-                    // This calls the threshold manager's method, which will run the full ForceCheckKillThresholds
-                    // (thus iterating over the entire party). In your updated code, you might add a separate
-                    // method for single-player checks if you truly wish to check *only* that player.
+                    // Also open the window for this check
+                    Service.ThresholdManager.OpenThresholdCheckWindow(false);
                     Service.ThresholdManager.CheckPlayerKills(nameParts[0], nameParts[1], world);
                     break;
 
@@ -318,18 +330,17 @@ namespace FFLogsViewer
                     object homeWorldValue = homeWorldProperty.GetValue(target);
                     string targetWorld = homeWorldValue?.ToString() ?? "";
                     Service.ChatGui.Print($"Checking thresholds for {targetFirstName} {targetLastName}@{targetWorld}...");
+
+                    // Also open the window for this check
+                    Service.ThresholdManager.OpenThresholdCheckWindow(false);
                     Service.ThresholdManager.CheckPlayerKills(targetFirstName, targetLastName, targetWorld);
                     break;
 
                 case "party":
                     Service.ChatGui.Print("Checking thresholds for all party members...");
-                    // In your code, you might do an explicit loop. However,
-                    // here we just call a single method that ends up calling ForceCheckKillThresholds anyway.
-                    Service.TeamManager.UpdateTeamList();
-                    foreach (var member in Service.TeamManager.TeamList)
-                    {
-                        Service.ThresholdManager.CheckPlayerKills(member.FirstName, member.LastName, member.World);
-                    }
+
+                    // Open the window and check thresholds
+                    Service.ThresholdManager.OpenThresholdCheckWindow(true);
                     break;
 
                 case "debug":
@@ -359,7 +370,7 @@ namespace FFLogsViewer
                     break;
 
                 default:
-                    Service.ChatGui.PrintError("Unknown subcommand. Use: check, target, party, or debug");
+                    Service.ChatGui.PrintError("Unknown subcommand. Use: window, check, target, party, or debug");
                     break;
             }
         }
