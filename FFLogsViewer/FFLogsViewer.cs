@@ -50,8 +50,11 @@ public sealed class FFLogsViewer : IDalamudPlugin
         this.thresholdCheckWindow = new ThresholdCheckWindow();
         this.windowSystem.AddWindow(this.thresholdCheckWindow);
 
-        // Create ThresholdManager and pass reference to the window
-        Service.ThresholdManager = new ThresholdManager(Service.TeamManager, Service.FFLogsClient);
+        // Store reference in Service for global access
+        Service.ThresholdCheckWindow = this.thresholdCheckWindow;
+
+        // Create ThresholdManager
+        Service.ThresholdManager = new ThresholdManager();
 
         // Set the reference to the ThresholdCheckWindow in the ThresholdManager
         if (Service.ThresholdManager is ThresholdManager manager)
@@ -155,26 +158,21 @@ public sealed class FFLogsViewer : IDalamudPlugin
                 return;
             }
 
-            // If party size changed, trigger a check
-            if (currentPartyMembers.Count != newPartyMembers.Count)
+            // Look for new party members
+            var newMembers = newPartyMembers.Except(currentPartyMembers).ToList();
+
+            // If we have new members, run the check and show the window
+            if (newMembers.Count > 0)
             {
-                Service.PluginLog.Debug($"[KillThreshold] Party size changed from {currentPartyMembers.Count} to {newPartyMembers.Count}");
+                Service.PluginLog.Debug($"[KillThreshold] New members detected: {newMembers.Count}");
+                Service.ChatGui.Print($"[KillThreshold] New party members detected. Running kill threshold check.");
 
-                // If new members have joined
-                if (newPartyMembers.Count > currentPartyMembers.Count)
-                {
-                    // Find new members (in new list but not in our tracking list)
-                    var newMembers = newPartyMembers.Except(currentPartyMembers).ToList();
+                // Make sure the window is open and visible first
+                thresholdCheckWindow.IsOpen = true;
+                thresholdCheckWindow.BringToFront();
 
-                    if (newMembers.Count > 0)
-                    {
-                        Service.PluginLog.Debug($"[KillThreshold] New members detected: {newMembers.Count}");
-                        Service.ChatGui.Print($"[KillThreshold] New party members detected. Running kill threshold check.");
-
-                        // Trigger a full party check - will show window and results
-                        Service.ThresholdManager.ForceCheckKillThresholds();
-                    }
-                }
+                // Then run the check
+                Service.ThresholdManager.ForceCheckKillThresholds(thresholdCheckWindow);
             }
 
             // Update our tracking set

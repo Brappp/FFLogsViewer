@@ -24,6 +24,7 @@ internal class Service
     internal static TeamManager TeamManager { get; set; } = null!;
     internal static FFLogsClient FFLogsClient { get; set; } = null!;
     internal static ThresholdManager ThresholdManager { get; set; } = null!;
+    internal static ThresholdCheckWindow ThresholdCheckWindow { get; set; } = null!;
 
     [PluginService] internal static IDalamudPluginInterface Interface { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;

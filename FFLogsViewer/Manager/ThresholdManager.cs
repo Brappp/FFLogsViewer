@@ -41,6 +41,7 @@ namespace FFLogsViewer.Manager
         public void SetThresholdCheckWindow(ThresholdCheckWindow window)
         {
             thresholdCheckWindow = window;
+            Service.PluginLog.Information("[KillThreshold] ThresholdCheckWindow reference set");
         }
 
         /// <summary>
@@ -52,11 +53,25 @@ namespace FFLogsViewer.Manager
             // Check if we have a reference to the window
             if (thresholdCheckWindow == null)
             {
-                Service.PluginLog.Warning("[KillThreshold] ThresholdCheckWindow reference not set");
-                return;
+                // Try to use the service reference as fallback
+                if (Service.ThresholdCheckWindow != null)
+                {
+                    thresholdCheckWindow = Service.ThresholdCheckWindow;
+                    Service.PluginLog.Information("[KillThreshold] Retrieved window reference from Service");
+                }
+                else
+                {
+                    Service.PluginLog.Warning("[KillThreshold] ThresholdCheckWindow reference not set");
+                    Service.ChatGui.Print("[KillThreshold] Could not open threshold window. Try reopening the plugin.");
+                    return;
+                }
             }
 
+            // Ensure window gets focus
             thresholdCheckWindow.IsOpen = true;
+            thresholdCheckWindow.BringToFront();
+
+            Service.PluginLog.Information($"[KillThreshold] Window IsOpen status: {thresholdCheckWindow.IsOpen}");
             Service.ChatGui.Print("[KillThreshold] Opening threshold check window.");
 
             if (runCheck)
@@ -64,6 +79,23 @@ namespace FFLogsViewer.Manager
                 Service.ChatGui.Print("[KillThreshold] Running threshold check...");
                 ForceCheckKillThresholds(thresholdCheckWindow);
             }
+        }
+
+        /// <summary>
+        /// Attempts to determine the current encounter from Party Finder or content
+        /// </summary>
+        /// <returns>The encounter ID if found, otherwise null</returns>
+        private int? DetermineCurrentEncounter()
+        {
+            // For now, this is a placeholder. In a full implementation, you would:
+            // 1. Check if in an instance and determine which one
+            // 2. Check Party Finder listings if player is recruiting
+            // 3. Check what PF the player has joined
+
+            // TODO: Implement proper detection of current encounter
+
+            // For testing, return null (which means check all thresholds)
+            return Service.Configuration.KillThresholds.CurrentEncounterId;
         }
 
         /// <summary>
@@ -82,12 +114,28 @@ namespace FFLogsViewer.Manager
             if (windowToUpdate == null)
             {
                 windowToUpdate = thresholdCheckWindow;
+
+                // If we still don't have a reference, try the service
+                if (windowToUpdate == null)
+                {
+                    windowToUpdate = Service.ThresholdCheckWindow;
+                    if (windowToUpdate != null)
+                    {
+                        Service.PluginLog.Information("[KillThreshold] Retrieved window from Service for check");
+                    }
+                }
+
+                // Make sure to open the window if we found one
+                if (windowToUpdate != null)
+                {
+                    windowToUpdate.IsOpen = true;
+                    windowToUpdate.BringToFront();
+                }
             }
 
             // If updating a window, clear existing data
             windowToUpdate?.ClearKillCounts();
 
-            // Rest of the method remains the same...
             // Ensure kill thresholds are configured.
             if (Service.Configuration.KillThresholds == null ||
                 Service.Configuration.KillThresholds.Thresholds == null ||
@@ -95,6 +143,34 @@ namespace FFLogsViewer.Manager
             {
                 Service.ChatGui.Print("[KillThreshold] No kill thresholds configured.");
                 return;
+            }
+
+            // Try to determine current encounter if we're checking only the matching encounter
+            int? currentEncounterId = null;
+            var thresholdsToCheck = Service.Configuration.KillThresholds.Thresholds;
+
+            if (Service.Configuration.KillThresholds.CheckOnlyMatchingEncounter)
+            {
+                currentEncounterId = DetermineCurrentEncounter();
+
+                // If we found a current encounter, filter the thresholds
+                if (currentEncounterId.HasValue)
+                {
+                    thresholdsToCheck = Service.Configuration.KillThresholds.Thresholds
+                        .Where(t => t.EncounterId == currentEncounterId.Value)
+                        .ToList();
+
+                    if (thresholdsToCheck.Count == 0)
+                    {
+                        Service.ChatGui.Print($"[KillThreshold] No threshold configured for current encounter (ID: {currentEncounterId})");
+                        // Fall back to checking all thresholds
+                        thresholdsToCheck = Service.Configuration.KillThresholds.Thresholds;
+                    }
+                    else
+                    {
+                        Service.ChatGui.Print($"[KillThreshold] Checking {thresholdsToCheck.Count} threshold(s) for current encounter: {thresholdsToCheck[0].EncounterName}");
+                    }
+                }
             }
 
             // Attempt to update the party list from your team or party manager.
@@ -119,8 +195,8 @@ namespace FFLogsViewer.Manager
                 bool hasFailedAnyThreshold = false;
                 string playerFullName = $"{member.FirstName} {member.LastName}";
 
-                // Check each threshold for this player
-                foreach (KillThreshold threshold in Service.Configuration.KillThresholds.Thresholds)
+                // Check each applicable threshold for this player
+                foreach (KillThreshold threshold in thresholdsToCheck)
                 {
                     // Retrieve kill count for this encounter
                     int currentKills = GetKillCountForEncounter(
@@ -203,6 +279,44 @@ namespace FFLogsViewer.Manager
                     OpenThresholdCheckWindow(false);
                 }
             }
+        }
+
+        /// <summary>
+        /// Sets the current encounter ID for targeted threshold checking
+        /// </summary>
+        /// <param name="encounterId">The encounter ID</param>
+        public void SetCurrentEncounter(int encounterId)
+        {
+            // This would be called by your PF detection or duty detection code
+            Service.Configuration.KillThresholds.CurrentEncounterId = encounterId;
+
+            // Get the encounter name for logging
+            string encounterName = "Unknown";
+            var threshold = Service.Configuration.KillThresholds.Thresholds.FirstOrDefault(t => t.EncounterId == encounterId);
+            if (threshold != null)
+            {
+                encounterName = threshold.EncounterName;
+            }
+            else
+            {
+                // Try to find it in the layout
+                var layoutEntry = Service.Configuration.Layout.FirstOrDefault(l => l.EncounterId == encounterId);
+                if (layoutEntry != null)
+                {
+                    encounterName = layoutEntry.Encounter;
+                }
+            }
+
+            Service.PluginLog.Information($"[KillThreshold] Current encounter set to: {encounterName} (ID: {encounterId})");
+        }
+
+        /// <summary>
+        /// Clears the current encounter ID
+        /// </summary>
+        public void ClearCurrentEncounter()
+        {
+            Service.Configuration.KillThresholds.CurrentEncounterId = null;
+            Service.PluginLog.Information("[KillThreshold] Current encounter cleared");
         }
 
         /// <summary>

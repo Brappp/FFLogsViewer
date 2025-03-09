@@ -26,6 +26,14 @@ namespace FFLogsViewer.Model
         public bool EnableKillChecking { get; set; } = false;
         public bool CheckOnPartyJoin { get; set; } = true;
         public bool CheckOnlyIfPartyLeader { get; set; } = true;
+        public bool CheckOnlyMatchingEncounter { get; set; } = true; // New setting for targeted checking
         public List<KillThreshold> Thresholds { get; set; } = new();
+
+        /// <summary>
+        /// Current encounter ID from Party Finder or content the player is in.
+        /// This will be set dynamically based on game state.
+        /// </summary>
+        [NonSerialized]
+        public int? CurrentEncounterId = null;
     }
 }

@@ -14,6 +14,7 @@ namespace FFLogsViewer.GUI.Config
     /// </summary>
     public class ThresholdsTab
     {
+        // Field declarations.
         private int selectedEncounterId = -1;
         private string selectedEncounterName = string.Empty;
         private int minimumKills = 1;
@@ -50,6 +51,15 @@ namespace FFLogsViewer.GUI.Config
                 }
                 Util.DrawHelp("Click to manually force a kill threshold check.");
 
+                // New setting to only check the matching encounter.
+                bool checkOnlyMatchingEncounter = settings.CheckOnlyMatchingEncounter;
+                if (ImGui.Checkbox("Only check thresholds for current Party Finder encounter", ref checkOnlyMatchingEncounter))
+                {
+                    settings.CheckOnlyMatchingEncounter = checkOnlyMatchingEncounter;
+                    hasChanged = true;
+                }
+                Util.DrawHelp("When enabled, only applies thresholds for the encounter you're currently in or have listed in Party Finder.");
+
                 bool checkOnPartyJoin = settings.CheckOnPartyJoin;
                 if (ImGui.Checkbox("Check automatically when players join the party", ref checkOnPartyJoin))
                 {
@@ -58,7 +68,7 @@ namespace FFLogsViewer.GUI.Config
                 }
                 Util.DrawHelp("When enabled, the system will automatically check thresholds when party composition changes.\nA window will pop up showing results for each party member.");
 
-                // Test button
+                // Test button.
                 if (ImGui.Button("Test Party Detection"))
                 {
                     Service.ChatGui.Print("[KillThreshold] Testing party threshold detection...");
@@ -81,24 +91,44 @@ namespace FFLogsViewer.GUI.Config
                         ImGui.TableSetupColumn("##Actions", ImGuiTableColumnFlags.WidthFixed, 30 * ImGui.GetIO().FontGlobalScale);
                         ImGui.TableHeadersRow();
 
+                        // Track if any threshold was removed to prevent index issues.
+                        bool removedThreshold = false;
+                        int indexToRemove = -1;
+
                         for (int i = 0; i < settings.Thresholds.Count; i++)
                         {
                             var threshold = settings.Thresholds[i];
 
                             ImGui.TableNextRow();
 
+                            // Column: Encounter Name.
                             ImGui.TableNextColumn();
                             ImGui.Text(threshold.EncounterName);
 
+                            // Column: Minimum Kills.
                             ImGui.TableNextColumn();
-                            int kills = threshold.MinimumKills;
-                            if (ImGui.InputInt($"##kills{i}", ref kills, 1, 5))
+                            // Display a decrement button.
+                            if (ImGui.Button($"-##kills_decr_{i}"))
                             {
-                                if (kills < 0) kills = 0;
-                                threshold.MinimumKills = kills;
+                                // Decrease threshold ensuring it does not drop below 0.
+                                if (threshold.MinimumKills > 0)
+                                {
+                                    threshold.MinimumKills--;
+                                    hasChanged = true;
+                                }
+                            }
+                            ImGui.SameLine();
+                            // Display the current threshold number.
+                            ImGui.Text($"{threshold.MinimumKills}");
+                            ImGui.SameLine();
+                            // Display an increment button.
+                            if (ImGui.Button($"+##kills_incr_{i}"))
+                            {
+                                threshold.MinimumKills++;
                                 hasChanged = true;
                             }
 
+                            // Column: Notification toggle.
                             ImGui.TableNextColumn();
                             bool notify = threshold.ShowNotification;
                             if (ImGui.Checkbox($"##notify{i}", ref notify))
@@ -107,6 +137,7 @@ namespace FFLogsViewer.GUI.Config
                                 hasChanged = true;
                             }
 
+                            // Column: Auto-Kick toggle.
                             ImGui.TableNextColumn();
                             bool kick = threshold.AutoKick;
                             if (ImGui.Checkbox($"##kick{i}", ref kick))
@@ -143,18 +174,27 @@ namespace FFLogsViewer.GUI.Config
                                 ImGui.EndPopup();
                             }
 
+                            // Column: Actions (Delete threshold).
                             ImGui.TableNextColumn();
                             using (var font = ImRaii.PushFont(UiBuilder.IconFont))
                             {
-                                if (ImGui.Button(FontAwesomeIcon.Trash.ToIconString()))
+                                // Fix for delete button - store index to remove after finishing table iteration.
+                                if (ImGui.Button($"{FontAwesomeIcon.Trash.ToIconString()}##{i}"))
                                 {
-                                    settings.Thresholds.RemoveAt(i);
-                                    hasChanged = true;
+                                    indexToRemove = i;
+                                    removedThreshold = true;
                                 }
                             }
                         }
 
                         ImGui.EndTable();
+
+                        // Remove threshold after the table loop to avoid issues.
+                        if (removedThreshold && indexToRemove >= 0 && indexToRemove < settings.Thresholds.Count)
+                        {
+                            settings.Thresholds.RemoveAt(indexToRemove);
+                            hasChanged = true;
+                        }
                     }
                 }
                 else

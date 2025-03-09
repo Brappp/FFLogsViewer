@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
@@ -18,9 +19,11 @@ namespace FFLogsViewer.GUI.Config
     {
         private Dictionary<string, Dictionary<int, int>> playerKillCounts = new();
         private Dictionary<string, bool> expandedThresholds = new();
-        private bool autoRefresh = true;
+        private bool autoRefresh = false; // Default to false
         private float timeSinceLastRefresh = 0;
-        private const float RefreshInterval = 5.0f; // Refresh every 5 seconds when auto-refresh is on
+        private const float RefreshInterval = 60.0f; // Increased to 60 seconds
+        private HashSet<string> checkedPlayers = new HashSet<string>(); // Track who we've already checked
+        private bool showThresholdSettings = true; // Controls visibility of the threshold settings section
 
         public ThresholdCheckWindow()
             : base("Kill Threshold Check##FFLogsThresholdCheckWindow")
@@ -33,6 +36,21 @@ namespace FFLogsViewer.GUI.Config
 
             this.RespectCloseHotkey = true;
             this.Flags = ImGuiWindowFlags.AlwaysAutoResize;
+        }
+
+        /// <summary>
+        /// Brings the window to the front and ensures it gets focus.
+        /// </summary>
+        public void BringToFront()
+        {
+            // Set ImGui window focus flag
+            ImGui.SetNextWindowFocus();
+
+            // Force the window to the front and make sure it's visible
+            this.Flags &= ~ImGuiWindowFlags.NoFocusOnAppearing;
+
+            // Log this action
+            Service.PluginLog.Debug("[KillThreshold] BringToFront called on ThresholdCheckWindow");
         }
 
         /// <summary>
@@ -52,6 +70,9 @@ namespace FFLogsViewer.GUI.Config
             }
 
             playerKillCounts[playerKey][encounterId] = killCount;
+
+            // Add to the set of checked players
+            checkedPlayers.Add(playerKey);
         }
 
         /// <summary>
@@ -60,22 +81,28 @@ namespace FFLogsViewer.GUI.Config
         public void ClearKillCounts()
         {
             playerKillCounts.Clear();
+            checkedPlayers.Clear();
         }
 
         public override void Draw()
         {
-            // Auto-refresh logic
+            // Only perform auto-refresh if enabled and at a much lower frequency
             if (autoRefresh)
             {
                 timeSinceLastRefresh += ImGui.GetIO().DeltaTime;
                 if (timeSinceLastRefresh >= RefreshInterval)
                 {
                     timeSinceLastRefresh = 0;
-                    RefreshThresholdChecks();
+                    // Only refresh for players that haven't been checked yet
+                    RefreshThresholdChecksForNewPlayers();
                 }
             }
 
             DrawSettingsBar();
+            ImGui.Separator();
+
+            // Display configured thresholds
+            DrawConfiguredThresholds();
             ImGui.Separator();
 
             if (Service.Configuration.KillThresholds.Thresholds.Count == 0)
@@ -104,18 +131,15 @@ namespace FFLogsViewer.GUI.Config
         {
             if (ImGui.Button("Check Now"))
             {
+                // Full refresh - check all party members regardless of whether they've been checked
                 RefreshThresholdChecks();
             }
 
             ImGui.SameLine();
-            ImGui.Checkbox("Auto-refresh", ref autoRefresh);
-
-            if (autoRefresh)
+            if (ImGui.Checkbox("Auto-check for new party members", ref autoRefresh))
             {
-                ImGui.SameLine();
-                // Show countdown to next refresh
-                float timeRemaining = RefreshInterval - timeSinceLastRefresh;
-                ImGui.Text($"(Next: {timeRemaining:F1}s)");
+                // Reset timer when toggling to avoid immediate refresh
+                timeSinceLastRefresh = 0;
             }
 
             ImGui.SameLine();
@@ -125,18 +149,157 @@ namespace FFLogsViewer.GUI.Config
             }
 
             ImGui.SameLine();
+            if (ImGui.Checkbox("Show Thresholds", ref showThresholdSettings))
+            {
+                // Toggle the threshold settings visibility
+            }
+
+            ImGui.SameLine();
             // Help text
             Util.DrawHelp("This window shows which party members pass or fail your configured kill thresholds.\n\n" +
-                         "Use the 'Check Now' button to manually refresh the data.\n" +
-                         "Enable 'Auto-refresh' to automatically check every 5 seconds.\n\n" +
+                         "Use the 'Check Now' button to manually refresh the data for all party members.\n" +
+                         "Enable 'Auto-check' to automatically check only newly joined party members.\n\n" +
                          "Click the ▶ next to a player's name to see their detailed kill counts.\n" +
                          "The 'Kick' button allows you to remove players who don't meet your requirements.");
         }
 
+        /// <summary>
+        /// Draws the configured thresholds that are being checked against.
+        /// </summary>
+        private void DrawConfiguredThresholds()
+        {
+            // Only draw if there are thresholds and the user wants to see them
+            if (!showThresholdSettings || Service.Configuration.KillThresholds.Thresholds.Count == 0)
+                return;
+
+            if (ImGui.CollapsingHeader("Current Kill Thresholds", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                // Check if we're only checking the matching encounter
+                bool isFiltering = Service.Configuration.KillThresholds.CheckOnlyMatchingEncounter;
+                int? currentEncounterId = Service.Configuration.KillThresholds.CurrentEncounterId;
+
+                if (isFiltering && currentEncounterId.HasValue)
+                {
+                    ImGui.TextColored(ImGuiColors.HealerGreen, $"Only checking thresholds for current encounter (ID: {currentEncounterId})");
+
+                    // Find the encounter name
+                    var matchingThreshold = Service.Configuration.KillThresholds.Thresholds
+                        .FirstOrDefault(t => t.EncounterId == currentEncounterId.Value);
+
+                    if (matchingThreshold != null)
+                    {
+                        ImGui.TextColored(ImGuiColors.HealerGreen, $"Current encounter: {matchingThreshold.EncounterName}");
+                    }
+                }
+
+                ImGui.Indent(10);
+
+                // Draw a table to show the configured thresholds
+                if (ImGui.BeginTable("ConfiguredThresholdsTable", 4, ImGuiTableFlags.Borders))
+                {
+                    // Set up the table headers
+                    ImGui.TableSetupColumn("Encounter", ImGuiTableColumnFlags.WidthStretch);
+                    ImGui.TableSetupColumn("Min Kills", ImGuiTableColumnFlags.WidthFixed, 80 * ImGuiHelpers.GlobalScale);
+                    ImGui.TableSetupColumn("Notify", ImGuiTableColumnFlags.WidthFixed, 60 * ImGuiHelpers.GlobalScale);
+                    ImGui.TableSetupColumn("Auto-Kick", ImGuiTableColumnFlags.WidthFixed, 80 * ImGuiHelpers.GlobalScale);
+                    ImGui.TableHeadersRow();
+
+                    // Calculate which thresholds to show
+                    var thresholdsToShow = Service.Configuration.KillThresholds.Thresholds;
+
+                    // If we're filtering, show only matching thresholds, or all if none match
+                    if (isFiltering && currentEncounterId.HasValue)
+                    {
+                        var matchingThresholds = thresholdsToShow
+                            .Where(t => t.EncounterId == currentEncounterId.Value)
+                            .ToList();
+
+                        if (matchingThresholds.Count > 0)
+                        {
+                            thresholdsToShow = matchingThresholds;
+                        }
+                    }
+
+                    // Draw each threshold
+                    foreach (var threshold in thresholdsToShow)
+                    {
+                        ImGui.TableNextRow();
+
+                        // Determine if this threshold is currently active
+                        bool isActive = !isFiltering || !currentEncounterId.HasValue ||
+                                      threshold.EncounterId == currentEncounterId.Value;
+
+                        // Use appropriate colors
+                        using var color = ImRaii.PushColor(
+                            ImGuiCol.Text,
+                            isActive ? ImGuiColors.DalamudWhite : ImGuiColors.DalamudGrey);
+
+                        // Encounter name
+                        ImGui.TableNextColumn();
+                        ImGui.Text(threshold.EncounterName);
+
+                        // Minimum kills
+                        ImGui.TableNextColumn();
+                        ImGui.Text(threshold.MinimumKills.ToString());
+
+                        // Show notifications
+                        ImGui.TableNextColumn();
+                        ImGui.Text(threshold.ShowNotification ? "Yes" : "No");
+
+                        // Auto-kick
+                        ImGui.TableNextColumn();
+                        ImGui.Text(threshold.AutoKick ? "Yes" : "No");
+                    }
+
+                    ImGui.EndTable();
+                }
+
+                // Add a button to open config directly
+                if (ImGui.Button("Edit Thresholds"))
+                {
+                    Service.ConfigWindow.IsOpen = true;
+                    Service.ConfigWindow.ThresholdsTab.Draw();
+                }
+
+                ImGui.Unindent(10);
+            }
+        }
+
+        /// <summary>
+        /// Refreshes threshold checks for all party members.
+        /// </summary>
         private void RefreshThresholdChecks()
         {
             // Use the ThresholdManager to check all party members
             Service.ThresholdManager.ForceCheckKillThresholds(this);
+        }
+
+        /// <summary>
+        /// Checks only party members who haven't been checked yet.
+        /// </summary>
+        private void RefreshThresholdChecksForNewPlayers()
+        {
+            // Update the team list to get current party members
+            Service.TeamManager.UpdateTeamList();
+
+            // Check if there are any new party members to process
+            bool hasNewMembers = false;
+            foreach (var member in Service.TeamManager.TeamList)
+            {
+                string playerKey = $"{member.FirstName} {member.LastName}@{member.World}";
+                if (!checkedPlayers.Contains(playerKey))
+                {
+                    hasNewMembers = true;
+                    break;
+                }
+            }
+
+            // Only do the refresh if we have new members
+            if (hasNewMembers)
+            {
+                Service.PluginLog.Information("[KillThreshold] Found new party members, running check");
+                RefreshThresholdChecks();
+            }
         }
 
         private void DrawThresholdResults()
@@ -161,9 +324,27 @@ namespace FFLogsViewer.GUI.Config
                     string playerName = playerParts[0];
                     string world = playerParts[1];
 
+                    // Determine which thresholds to check against
+                    var thresholdsToCheck = Service.Configuration.KillThresholds.Thresholds;
+
+                    // If filtering is enabled and we have a current encounter, filter the thresholds
+                    if (Service.Configuration.KillThresholds.CheckOnlyMatchingEncounter &&
+                        Service.Configuration.KillThresholds.CurrentEncounterId.HasValue)
+                    {
+                        int currentId = Service.Configuration.KillThresholds.CurrentEncounterId.Value;
+                        var matchingThresholds = thresholdsToCheck
+                            .Where(t => t.EncounterId == currentId)
+                            .ToList();
+
+                        if (matchingThresholds.Count > 0)
+                        {
+                            thresholdsToCheck = matchingThresholds;
+                        }
+                    }
+
                     // Check if player fails any thresholds
                     bool passesAllThresholds = true;
-                    foreach (var threshold in Service.Configuration.KillThresholds.Thresholds)
+                    foreach (var threshold in thresholdsToCheck)
                     {
                         if (killCounts.TryGetValue(threshold.EncounterId, out int kills))
                         {
@@ -191,7 +372,7 @@ namespace FFLogsViewer.GUI.Config
                         expandedThresholds[playerKey] = true;
 
                         // Show detailed threshold results for this player
-                        foreach (var threshold in Service.Configuration.KillThresholds.Thresholds)
+                        foreach (var threshold in thresholdsToCheck)
                         {
                             int kills = killCounts.TryGetValue(threshold.EncounterId, out int k) ? k : 0;
                             bool passesThreshold = kills >= threshold.MinimumKills;
@@ -269,8 +450,15 @@ namespace FFLogsViewer.GUI.Config
             }
         }
 
+        public override void OnOpen()
+        {
+            Service.PluginLog.Debug("[KillThreshold] ThresholdCheckWindow.OnOpen called");
+            BringToFront(); // Ensure window gets focus when opened
+        }
+
         public override void OnClose()
         {
+            Service.PluginLog.Debug("[KillThreshold] ThresholdCheckWindow.OnClose called");
             // Optional: Clear data when window is closed
             // ClearKillCounts();
         }
