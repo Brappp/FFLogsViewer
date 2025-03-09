@@ -35,19 +35,24 @@ namespace FFLogsViewer.Manager
         }
 
         /// <summary>
+        /// Sets the reference to the ThresholdCheckWindow.
+        /// </summary>
+        /// <param name="window">The ThresholdCheckWindow instance.</param>
+        public void SetThresholdCheckWindow(ThresholdCheckWindow window)
+        {
+            thresholdCheckWindow = window;
+        }
+
+        /// <summary>
         /// Opens the threshold check window.
         /// </summary>
         /// <param name="runCheck">If true, runs a check immediately upon opening.</param>
         public void OpenThresholdCheckWindow(bool runCheck = false)
         {
-            // Find the window in WindowSystem instead of creating a new one
-            var windowSystem = Service.Interface.UiBuilder.Windows;
-            thresholdCheckWindow = windowSystem.Windows.FirstOrDefault(w => w is ThresholdCheckWindow) as ThresholdCheckWindow;
-
+            // Check if we have a reference to the window
             if (thresholdCheckWindow == null)
             {
-                Service.PluginLog.Warning("Could not find ThresholdCheckWindow in WindowSystem");
-                // This should not happen as window is registered in FFLogsViewer constructor
+                Service.PluginLog.Warning("[KillThreshold] ThresholdCheckWindow reference not set");
                 return;
             }
 
@@ -76,13 +81,13 @@ namespace FFLogsViewer.Manager
             // Find the window if not provided
             if (windowToUpdate == null)
             {
-                var windowSystem = Service.Interface.UiBuilder.Windows;
-                windowToUpdate = windowSystem.Windows.FirstOrDefault(w => w is ThresholdCheckWindow) as ThresholdCheckWindow;
+                windowToUpdate = thresholdCheckWindow;
             }
 
             // If updating a window, clear existing data
             windowToUpdate?.ClearKillCounts();
 
+            // Rest of the method remains the same...
             // Ensure kill thresholds are configured.
             if (Service.Configuration.KillThresholds == null ||
                 Service.Configuration.KillThresholds.Thresholds == null ||

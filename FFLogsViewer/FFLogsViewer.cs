@@ -18,10 +18,11 @@ public sealed class FFLogsViewer : IDalamudPlugin
 {
     private readonly WindowSystem windowSystem;
     private readonly FFLogsViewerProvider ffLogsViewerProvider;
-    private readonly HashSet<string> currentPartyMembers = new();
+    private HashSet<string> currentPartyMembers = new(); // Removed readonly to allow reassignment
     private bool isInitialPartyCheck = true;
     private readonly object partyLock = new();
     private DateTime lastCheckTime = DateTime.MinValue;
+    private ThresholdCheckWindow thresholdCheckWindow;
 
     public FFLogsViewer(IDalamudPluginInterface pluginInterface)
     {
@@ -37,7 +38,6 @@ public sealed class FFLogsViewer : IDalamudPlugin
         Service.HistoryManager = new HistoryManager();
         Service.TeamManager = new TeamManager();
         Service.FFLogsClient = new FFLogsClient();
-        Service.ThresholdManager = new ThresholdManager(Service.TeamManager, Service.FFLogsClient);
 
         Service.MainWindow = new MainWindow();
         Service.ConfigWindow = new ConfigWindow();
@@ -46,9 +46,18 @@ public sealed class FFLogsViewer : IDalamudPlugin
         this.windowSystem.AddWindow(Service.ConfigWindow);
         this.windowSystem.AddWindow(Service.MainWindow);
 
-        // Add the threshold check window to the WindowSystem
-        var thresholdCheckWindow = new ThresholdCheckWindow();
-        this.windowSystem.AddWindow(thresholdCheckWindow);
+        // Create the threshold check window and add it to the WindowSystem
+        this.thresholdCheckWindow = new ThresholdCheckWindow();
+        this.windowSystem.AddWindow(this.thresholdCheckWindow);
+
+        // Create ThresholdManager and pass reference to the window
+        Service.ThresholdManager = new ThresholdManager(Service.TeamManager, Service.FFLogsClient);
+
+        // Set the reference to the ThresholdCheckWindow in the ThresholdManager
+        if (Service.ThresholdManager is ThresholdManager manager)
+        {
+            manager.SetThresholdCheckWindow(this.thresholdCheckWindow);
+        }
 
         ContextMenu.Enable();
 
@@ -56,10 +65,18 @@ public sealed class FFLogsViewer : IDalamudPlugin
 
         Service.Interface.UiBuilder.OpenMainUi += OpenMainUi;
         Service.Interface.UiBuilder.OpenConfigUi += OpenConfigUi;
-        Service.Interface.UiBuilder.Draw += this.windowSystem.Draw;
+
+        // Fix for Draw delegate signature mismatch
+        Service.Interface.UiBuilder.Draw += DrawUI;
 
         // Hook into Framework updates to detect party joins
         HookPartyJoinEvents();
+    }
+
+    // Create a wrapper method for Draw that matches the expected signature
+    private void DrawUI()
+    {
+        this.windowSystem.Draw();
     }
 
     public void Dispose()
@@ -75,7 +92,9 @@ public sealed class FFLogsViewer : IDalamudPlugin
 
         Service.Interface.UiBuilder.OpenMainUi -= OpenMainUi;
         Service.Interface.UiBuilder.OpenConfigUi -= OpenConfigUi;
-        Service.Interface.UiBuilder.Draw -= this.windowSystem.Draw;
+        Service.Interface.UiBuilder.Draw -= DrawUI; // Use the wrapper method here too
+
+        this.windowSystem.RemoveAllWindows();
     }
 
     private static void OpenMainUi()
@@ -187,9 +206,11 @@ public sealed class FFLogsViewer : IDalamudPlugin
             Service.TeamManager.UpdateTeamList();
             if (Service.TeamManager.TeamList != null && Service.TeamManager.TeamList.Count > 0)
             {
-                currentPartyMembers = new HashSet<string>(
-                    Service.TeamManager.TeamList.Select(m => $"{m.FirstName}|{m.LastName}|{m.World}")
-                );
+                var members = Service.TeamManager.TeamList.Select(m => $"{m.FirstName}|{m.LastName}|{m.World}");
+                foreach (var member in members)
+                {
+                    currentPartyMembers.Add(member);
+                }
             }
         }
     }
